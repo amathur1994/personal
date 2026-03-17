@@ -44,7 +44,7 @@ def generate(query, context, stream: bool = False):
 if __name__ == "__main__":
     from retriever import retrieve, format_context
 
-    query = "What is the current fed funds rate and how does it affect markets?"
+    query = input("Enter your query: ")
     chunks = retrieve(query)
     context = format_context(chunks)
 

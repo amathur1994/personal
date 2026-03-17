@@ -14,10 +14,6 @@ from llm import generate
 
 
 BANNER = """
-╔══════════════════════════════════════╗
-║         finews_bot  📈               ║
-║  Your AI-powered financial assistant ║
-╚══════════════════════════════════════╝
 Type 'refresh' to reload live market data.
 Type 'quit' or 'exit' to quit.
 """
