@@ -1,8 +1,6 @@
 """
-Retrieval layer for finews_bot.
-
-Queries ChromaDB with a user's question and returns the most relevant chunks
-to be passed as context to the LLM.
+Queries ChromaDB with a user's question and returns all chunks that
+exceed a minimum similarity threshold, to be passed as context to the LLM.
 """
 
 import chromadb
@@ -10,21 +8,45 @@ from chromadb.utils import embedding_functions
 
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "finews"
-EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-TOP_K = 5
 
+# using sentence transformer for embeddings distance check 
+# lightweight so good fit for small chatbot 
+embed_model = "sentence-transformers/all-MiniLM-L6-v2"
+
+# setting threshold for similarity between embeddings for retrieving from DB
+similarity_thr = 0.3
 
 def get_collection():
     client = chromadb.PersistentClient(path=CHROMA_PATH)
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
+    ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=embed_model)
     return client.get_or_create_collection(name=COLLECTION_NAME, embedding_function=ef)
 
 
-def retrieve(query: str, top_k: int = TOP_K) -> list[str]:
-    """Returns the top_k most relevant text chunks for a given query."""
+def retrieve(query, threshold = similarity_thr):
+    """
+    Returns all chunks whose cosine similarity
+    to the query meets the threshold.
+    """
     collection = get_collection()
-    results = collection.query(query_texts=[query], n_results=top_k)
-    return results["documents"][0]
+    n_total = collection.count()
+    if n_total == 0:
+        return []
+
+    results = collection.query(
+        query_texts=[query],
+        n_results=n_total,
+        include=["documents", "distances"],
+    )
+
+    distance_cutoff = 1 - threshold
+    filtered = [
+        doc
+        for doc, dist in zip(results["documents"][0], results["distances"][0])
+        if dist <= distance_cutoff
+    ]
+
+    print(f"  Retrieved {len(filtered)}/{n_total} chunks above similarity threshold {threshold}.")
+    return filtered
 
 
 def format_context(chunks):
