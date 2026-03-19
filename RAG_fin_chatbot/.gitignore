@@ -1,0 +1,13 @@
+# Secrets — never commit
+.env
+
+# Gradio runtime files
+.gradio/
+
+# ChromaDB vector store (rebuilt on refresh)
+chroma_db/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
