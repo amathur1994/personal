@@ -1,0 +1,11 @@
+yfinance
+newsapi-python
+fredapi
+feedparser
+python-dotenv
+chromadb
+sentence-transformers
+requests
+wbgapi
+beautifulsoup4
+gradio
