@@ -12,7 +12,7 @@ MEMORY_WINDOW = 5
 HEADER = """
 <div style="text-align:center; padding: 8px 0 4px;">
   <h1 style="font-size:2rem; margin-bottom:4px;">📈 KanuBot</h1>
-  <p style="color:#555; font-size:1rem; margin:0;">Your personal Indian Markets Guru — powered by live data & Mistral 7B</p>
+  <p style="color:#555; font-size:1rem; margin:0;">Your personal Indian Markets Guru — powered by live data & Anthropic Claude</p>
 </div>
 """
 

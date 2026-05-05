@@ -9,3 +9,4 @@ requests
 wbgapi
 beautifulsoup4
 gradio
+anthropic

@@ -1,54 +1,58 @@
 """
-LLM layer for finews_bot.
+LLM layer for KanuBot.
 
-Passes retrieved context + user query to a locally running Mistral 7B
-model via Ollama and returns a grounded financial summary response.
+Passes retrieved context + user query to Claude Haiku via the Anthropic API
+and returns a grounded financial summary response.
 Supports conversation history for multi-turn memory.
 """
 
-import requests
+import os
+import anthropic
+from dotenv import load_dotenv
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "mistral"
+load_dotenv()
 
-SYSTEM_PROMPT = """You are FinBot, a financial assistant specialising in Indian markets and the global factors that impact them.
+MODEL = "claude-haiku-4-5-20251001"
+
+SYSTEM_PROMPT = """You are KanuBot, a financial assistant specialising in Indian markets and the global factors that impact them.
 Answer the user's question using only the context provided below.
 Be concise, factual, and avoid speculation beyond what the data supports.
 If the context doesn't contain enough information to answer, say so clearly."""
 
+_client = None
 
-def build_prompt(context, query, history = None):
-    history_block = ""
+
+def _get_client():
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    return _client
+
+
+def generate(query, context, history=None, **kwargs):
+    messages = []
+
     if history:
-        lines = []
         for turn in history:
-            lines.append(f"User: {turn['user']}")
-            lines.append(f"Assistant: {turn['assistant']}")
-        history_block = "\n## Conversation History\n" + "\n".join(lines) + "\n"
+            messages.append({"role": "user", "content": turn["user"]})
+            messages.append({"role": "assistant", "content": turn["assistant"]})
 
-    return f"""{SYSTEM_PROMPT}
-{history_block}
-## Live Market Context
+    user_message = f"""## Live Market Context
 {context}
 
 ## Current Question
-{query}
+{query}"""
 
-## Answer
-"""
+    messages.append({"role": "user", "content": user_message})
 
+    response = _get_client().messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        system=SYSTEM_PROMPT,
+        messages=messages,
+    )
 
-def generate(query, context, history = None, stream = False):
-    prompt = build_prompt(context, query, history)
-
-    response = requests.post(OLLAMA_URL, json={
-        "model": MODEL,
-        "prompt": prompt,
-        "stream": stream,
-    })
-
-    response.raise_for_status()
-    return response.json()["response"]
+    return response.content[0].text
 
 
 if __name__ == "__main__":
