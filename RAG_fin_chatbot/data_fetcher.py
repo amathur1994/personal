@@ -15,6 +15,7 @@ list of sources:
 import os
 import feedparser
 import yfinance as yf
+import pandas as pd
 from datetime import datetime, timedelta
 from newsapi import NewsApiClient
 from fredapi import Fred
@@ -32,6 +33,18 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 FRED_API_KEY = os.getenv("FRED_API_KEY")
 
 TIMEOUT_SECONDS = 15
+
+NSE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection":      "keep-alive",
+}
 
 # default stock tickers — Indian indices, large-caps, and global benchmarks
 STOCK_TICKERS = [
@@ -78,6 +91,89 @@ STOCK_TICKERS = [
     "MSFT",          # Microsoft
     "GOOGL",         # Alphabet
 ]
+
+# NSE futures tickers — indices and large-cap stocks
+NSE_FUTURES_TICKERS = [
+    "NIFTY", "BANKNIFTY", "HDFCBANK", "ICICIBANK", "SBIN",
+    "RELIANCE", "TCS", "INFY", "AXISBANK", "BAJFINANCE",
+]
+
+def fetch_nse_futures():
+    results = []
+    session = requests.Session()
+    # establish the session cookie NSE requires before any API calls
+    session.get("https://www.nseindia.com", headers=NSE_HEADERS, timeout=TIMEOUT_SECONDS)
+    api_headers = {**NSE_HEADERS, "Accept": "application/json",
+                   "Referer": "https://www.nseindia.com"}
+    for ticker in NSE_FUTURES_TICKERS:
+        try:
+            url  = f"https://www.nseindia.com/api/quote-derivative?symbol={ticker}"
+            resp = session.get(url, headers=api_headers, timeout=TIMEOUT_SECONDS)
+            resp.raise_for_status()
+            stocks = resp.json().get("stocks", [])
+            if not stocks:
+                print(f"  [WARN] NSE API returned no futures data for {ticker}")
+                continue
+            contract   = stocks[0]
+            metadata   = contract.get("metadata", {})
+            trade_info = contract.get("marketDeptOrderBook", {}).get("tradeInfo", {})
+            other_info = contract.get("marketDeptOrderBook", {}).get("otherInfo", {})
+            results.append({
+                "ticker":                  ticker,
+                "expiryDate":              metadata.get("expiryDate"),
+                "lastPrice":               metadata.get("lastPrice"),
+                "change":                  metadata.get("change"),
+                "pChange":                 metadata.get("pChange"),
+                "numberOfContractsTraded": metadata.get("numberOfContractsTraded"),
+                "totalTurnover":           metadata.get("totalTurnover"),
+                "openInterest":            trade_info.get("openInterest"),
+                "changeInOpenInterest":    trade_info.get("changeinOpenInterest"),
+                "pchangeinOpenInterest":   trade_info.get("pchangeinOpenInterest"),
+                "dailyVolatility":         other_info.get("dailyvolatility"),     # lowercase 'v' in NSE JSON
+                "annualisedVolatility":    other_info.get("annualisedVolatility"),
+            })
+        except Exception as e:
+            print(f"  [WARN] NSE futures fetch failed for {ticker}: {e}")
+    return results
+
+# MCX symbol → global NYMEX/COMEX yfinance proxy (MCX bhavcopy endpoint is broken)
+MCX_SYMBOL_MAP = {
+    "CRUDEOIL":   "CL=F",   # NYMEX WTI Crude Oil
+    "GOLD":       "GC=F",   # COMEX Gold
+    "SILVER":     "SI=F",   # COMEX Silver
+    "NATURALGAS": "NG=F",   # NYMEX Natural Gas
+    "COPPER":     "HG=F",   # COMEX Copper
+    "ZINC":       "ZN=F",   # COMEX Zinc
+}
+
+def fetch_mcx_bhavcopy():
+    # MCX bhavcopy endpoint returns empty responses for all dates; use global futures as proxies
+    results = []
+    for mcx_symbol, yf_ticker in MCX_SYMBOL_MAP.items():
+        try:
+            t    = yf.Ticker(yf_ticker)
+            hist = t.history(period="1d", timeout=TIMEOUT_SECONDS)
+            if hist.empty:
+                print(f"  [WARN] MCX proxy: no yfinance data for {mcx_symbol} ({yf_ticker})")
+                continue
+            row  = hist.iloc[-1]
+            info = t.info
+            expiry_ts  = info.get("expireDate")
+            expiry_str = (datetime.utcfromtimestamp(expiry_ts).strftime("%d-%b-%Y").upper()
+                          if expiry_ts else None)
+            results.append({
+                "Symbol":       mcx_symbol,
+                "ExpiryDate":   expiry_str,
+                "Open":         round(float(row["Open"]),  2),
+                "High":         round(float(row["High"]),  2),
+                "Low":          round(float(row["Low"]),   2),
+                "Close":        round(float(row["Close"]), 2),
+                "Volume":       int(row["Volume"]),
+                "OpenInterest": info.get("openInterest"),
+            })
+        except Exception as e:
+            print(f"  [WARN] MCX proxy fetch failed for {mcx_symbol} ({yf_ticker}): {e}")
+    return results
 
 # fetch equity info from yahoo finance
 def fetch_stock_data(tickers: list[str], period: str = "5d"):
@@ -354,80 +450,68 @@ def fetch_economic_calendar(countries: list[str] = CALENDAR_COUNTRIES, days_ahea
 
 # combine fetched data
 def fetch_all(tickers):
-    print("Fetching stock data:")
-    try:
-        stocks = fetch_stock_data(tickers)
-    except Exception as e:
-        print(f"  [WARN] Stock data fetch failed: {e}")
-        stocks = []
+    # ThreadPoolExecutor is used instead of asyncio because all fetchers rely on
+    # the synchronous `requests` library; threads let them overlap I/O without
+    # requiring async rewrites of every fetcher.
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    print("Fetching news (NewsAPI):")
-    try:
-        news = fetch_news()
-    except Exception as e:
-        print(f"  [WARN] News fetch failed: {e}")
-        news = []
+    tasks = {
+        "stocks":      (fetch_stock_data,        (tickers,), "Stock data fetch failed",           []),
+        "news":        (fetch_news,               (),         "News fetch failed",                  []),
+        "macro":       (fetch_macro_indicators,   (),         "FRED macro fetch failed",            {}),
+        "rss":         (fetch_rss_news,           (),         "RSS fetch failed",                   []),
+        "forex":       (fetch_forex_data,         (),         "Forex fetch failed",                 []),
+        "commodities": (fetch_commodity_data,     (),         "Commodity fetch failed",             []),
+        "crypto":      (fetch_crypto_data,        (),         "Crypto fetch failed",                []),
+        "worldbank":   (fetch_worldbank_india,    (),         "World Bank fetch failed",            {}),
+        "calendar":    (fetch_economic_calendar,  (),         "Economic calendar fetch failed",     []),
+        "nse_futures": (fetch_nse_futures,        (),         "NSE futures fetch failed",           []),
+        "mcx_futures": (fetch_mcx_bhavcopy,       (),         "MCX bhavcopy fetch failed",          []),
+    }
 
-    print("Fetching macro indicators (FRED):")
-    try:
-        macro = fetch_macro_indicators()
-    except Exception as e:
-        print(f"  [WARN] FRED macro fetch failed: {e}")
-        macro = {}
+    PRINT_LABELS = {
+        "stocks":      "Fetching stock data:",
+        "news":        "Fetching news (NewsAPI):",
+        "macro":       "Fetching macro indicators (FRED):",
+        "rss":         "Fetching RSS news (Yahoo Finance):",
+        "forex":       "Fetching forex data:",
+        "commodities": "Fetching commodity data:",
+        "crypto":      "Fetching crypto data:",
+        "worldbank":   "Fetching World Bank India indicators:",
+        "calendar":    "Fetching economic calendar (India + US):",
+        "nse_futures": "Fetching NSE futures data:",
+        "mcx_futures": "Fetching MCX commodity bhavcopy:",
+    }
 
-    print("Fetching RSS news (Yahoo Finance):")
-    try:
-        rss = fetch_rss_news()
-    except Exception as e:
-        print(f"  [WARN] RSS fetch failed: {e}")
-        rss = []
+    results = {}
+    with ThreadPoolExecutor(max_workers=11) as executor:
+        future_to_key = {}
+        for key, (fn, args, _, _default) in tasks.items():
+            print(PRINT_LABELS[key])
+            future_to_key[executor.submit(fn, *args)] = key
 
-    print("Fetching forex data:")
-    try:
-        forex = fetch_forex_data()
-    except Exception as e:
-        print(f"  [WARN] Forex fetch failed: {e}")
-        forex = []
-
-    print("Fetching commodity data:")
-    try:
-        commodities = fetch_commodity_data()
-    except Exception as e:
-        print(f"  [WARN] Commodity fetch failed: {e}")
-        commodities = []
-
-    print("Fetching crypto data:")
-    try:
-        crypto = fetch_crypto_data()
-    except Exception as e:
-        print(f"  [WARN] Crypto fetch failed: {e}")
-        crypto = []
-
-    print("Fetching World Bank India indicators:")
-    try:
-        worldbank = fetch_worldbank_india()
-    except Exception as e:
-        print(f"  [WARN] World Bank fetch failed: {e}")
-        worldbank = {}
-
-    print("Fetching economic calendar (India + US):")
-    try:
-        calendar = fetch_economic_calendar()
-    except Exception as e:
-        print(f"  [WARN] Economic calendar fetch failed: {e}")
-        calendar = []
+        for future in as_completed(future_to_key):
+            key = future_to_key[future]
+            _fn, _args, warn_msg, default = tasks[key]
+            try:
+                results[key] = future.result()
+            except Exception as e:
+                print(f"  [WARN] {warn_msg}: {e}")
+                results[key] = default
 
     return {
         "fetched_at":  (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S IST"),
-        "stocks":      stocks,
-        "news":        news,
-        "macro":       macro,
-        "rss":         rss,
-        "forex":       forex,
-        "commodities": commodities,
-        "crypto":      crypto,
-        "worldbank":   worldbank,
-        "calendar":    calendar,
+        "stocks":      results["stocks"],
+        "news":        results["news"],
+        "macro":       results["macro"],
+        "rss":         results["rss"],
+        "forex":       results["forex"],
+        "commodities": results["commodities"],
+        "crypto":      results["crypto"],
+        "worldbank":   results["worldbank"],
+        "calendar":    results["calendar"],
+        "nse_futures": results["nse_futures"],
+        "mcx_futures": results["mcx_futures"],
     }
 
 if __name__ == "__main__":
