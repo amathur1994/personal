@@ -110,6 +110,34 @@ def calendar_to_texts(events):
     return results
 
 
+def nse_futures_to_texts(futures_data):
+    results = []
+    for f in futures_data:
+        text = (
+            f"{f['ticker']} near-month futures expiring {f['expiryDate']} "
+            f"last traded at {f['lastPrice']}. "
+            f"Change: {f['pChange']}%. Open Interest: {f['openInterest']} contracts, "
+            f"changed {f['pchangeinOpenInterest']}% today. "
+            f"Daily volatility: {f['dailyVolatility']}%. "
+            f"Annualised volatility: {f['annualisedVolatility']}%. "
+            f"Contracts traded today: {f['numberOfContractsTraded']}."
+        )
+        results.append((f"fut_{f['ticker']}", text))
+    return results
+
+def mcx_futures_to_texts(mcx_data):
+    results = []
+    for m in mcx_data:
+        expiry = str(m.get("ExpiryDate", "")).replace(" ", "").replace("-", "")
+        text = (
+            f"{m['Symbol']} MCX futures expiring {m['ExpiryDate']} closed at {m['Close']}. "
+            f"High: {m['High']}, Low: {m['Low']}. Volume: {m['Volume']} lots. "
+            f"Open Interest: {m['OpenInterest']} contracts."
+        )
+        results.append((f"mcx_{m['Symbol']}_{expiry}", text))
+    return results
+
+
 def get_collection():
     client = chromadb.PersistentClient(path=CHROMA_PATH)
     ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
@@ -140,6 +168,8 @@ def build_vector_db():
         + crypto_to_texts(data["crypto"])
         + worldbank_to_texts(data["worldbank"])
         + calendar_to_texts(data["calendar"])
+        + nse_futures_to_texts(data["nse_futures"])
+        + mcx_futures_to_texts(data["mcx_futures"])
     )
     print(f"  Total chunks: {len(chunks)}")
 
