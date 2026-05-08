@@ -55,14 +55,8 @@ def chat(message, history):
             for h in history[-MEMORY_WINDOW:]
         ]
 
-    chunks = retrieve(message)
-    if not chunks:
-        return (
-            "⚠️ No relevant market data found for your query. "
-            "Try clicking **Refresh Market Data** to load the latest data first."
-        )
-
-    context = format_context(chunks)
+    chunks  = retrieve(message)
+    context = format_context(chunks) if chunks else ""
     return generate(message, context, history=memory)
 
 
