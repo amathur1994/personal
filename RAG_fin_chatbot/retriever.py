@@ -34,7 +34,8 @@ def retrieve(query, threshold = similarity_thr):
 
     results = collection.query(
         query_texts=[query],
-        n_results=n_total,
+        # keeping this as fixed for efficient use of HNSW graph in ChromaDB
+        n_results=10,
         include=["documents", "distances"],
     )
 

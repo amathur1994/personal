@@ -10,3 +10,4 @@ wbgapi
 beautifulsoup4
 gradio
 anthropic
+nsetools
