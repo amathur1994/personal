@@ -119,6 +119,29 @@ const THEMES = {
 
 const PRIORITY_LABELS = { high: "High", med: "Medium", low: "Low" };
 
+// ─── GIST SYNC ───────────────────────────────────────────────────────────────
+const GIST_FILENAME = 'checklist.json';
+
+async function gistSync(token, gistId, lists) {
+  const payload = { files: { [GIST_FILENAME]: { content: JSON.stringify(lists) } } };
+  if (!gistId) {
+    const r = await fetch('https://api.github.com/gists', {
+      method: 'POST',
+      headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, description: 'Checklist App Data', public: false }),
+    });
+    if (!r.ok) throw new Error('create failed');
+    return (await r.json()).id;
+  }
+  const r = await fetch(`https://api.github.com/gists/${gistId}`, {
+    method: 'PATCH',
+    headers: { Authorization: `token ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!r.ok) throw new Error('update failed');
+  return gistId;
+}
+
 // ─── SAMPLE DATA ────────────────────────────────────────────────────────────
 const makeId = () => Math.random().toString(36).slice(2,9);
 
@@ -184,6 +207,7 @@ const Icon = ({ name, size = 18, color = "currentColor", strokeWidth = 1.8 }) =>
     check: <><polyline points="20 6 9 17 4 12"/></>,
     chevronRight: <><polyline points="9 18 15 12 9 6"/></>,
     chevronDown: <><polyline points="6 9 12 15 18 9"/></>,
+    chevronUp: <><polyline points="18 15 12 9 6 15"/></>,
     chevronLeft: <><polyline points="15 18 9 12 15 6"/></>,
     calendar: <><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>,
     note: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></>,
@@ -557,6 +581,21 @@ function DetailScreen({ list, theme, onChange, onBack }) {
   const deleteTask = (taskId) => {
     onChange({ ...list, tasks: list.tasks.filter(t => t.id !== taskId) });
   };
+  const moveTask = (taskId, dir) => {
+    const tasks = [...list.tasks];
+    const idx = tasks.findIndex(t => t.id === taskId);
+    if (dir === 'up' && idx > 0) {
+      [tasks[idx - 1], tasks[idx]] = [tasks[idx], tasks[idx - 1]];
+      onChange({ ...list, tasks });
+    } else if (dir === 'down' && idx < tasks.length - 1) {
+      [tasks[idx], tasks[idx + 1]] = [tasks[idx + 1], tasks[idx]];
+      onChange({ ...list, tasks });
+    }
+  };
+  const sortByPriority = () => {
+    const order = { high: 0, med: 1, low: 2 };
+    onChange({ ...list, tasks: [...list.tasks].sort((a, b) => (order[a.priority] ?? 3) - (order[b.priority] ?? 3)) });
+  };
   const addSubtask = (taskId) => {
     if (!newSubtask.trim()) return;
     const sub = { id: makeId(), text: newSubtask.trim(), done: false };
@@ -613,6 +652,20 @@ function DetailScreen({ list, theme, onChange, onBack }) {
             </div>
             <ProgressBar pct={pct} theme={theme} accent={color} height={8} />
           </div>
+          {list.tasks.length > 1 && (
+            <button onClick={sortByPriority} title="Sort by priority: High → Medium → Low" style={{
+              display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+              background: theme.accentSoft, border: `1.5px solid ${theme.accent}40`,
+              borderRadius: 10, padding: '7px 13px', cursor: 'pointer',
+              fontFamily: 'DM Sans, sans-serif', fontSize: 12, fontWeight: 600,
+              color: theme.accentText, transition: 'all 0.2s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = theme.accent; e.currentTarget.style.color = '#fff'; e.currentTarget.style.borderColor = theme.accent; }}
+            onMouseLeave={e => { e.currentTarget.style.background = theme.accentSoft; e.currentTarget.style.color = theme.accentText; e.currentTarget.style.borderColor = `${theme.accent}40`; }}>
+              <Icon name="flag" size={13} />
+              Sort by Priority
+            </button>
+          )}
         </div>
         {pct === 100 && list.tasks.length > 0 && (
           <div style={{
@@ -641,6 +694,10 @@ function DetailScreen({ list, theme, onChange, onBack }) {
               onCheck={done => updateTask(task.id, { done })}
               onUpdate={patch => updateTask(task.id, patch)}
               onDelete={() => deleteTask(task.id)}
+              onMoveUp={() => moveTask(task.id, 'up')}
+              onMoveDown={() => moveTask(task.id, 'down')}
+              isFirst={i === 0}
+              isLast={i === list.tasks.length - 1}
               onSubCheck={(subId, done) => updateSubtask(task.id, subId, { done })}
               addingSubtask={addingSubtask === task.id}
               newSubtask={newSubtask}
@@ -679,7 +736,7 @@ function DetailScreen({ list, theme, onChange, onBack }) {
   );
 }
 
-function TaskRow({ task, theme, color, delay, expanded, onToggle, onCheck, onUpdate, onDelete, onSubCheck, addingSubtask, newSubtask, onNewSubtaskChange, onAddSubtaskStart, onAddSubtask, onCancelSubtask }) {
+function TaskRow({ task, theme, color, delay, expanded, onToggle, onCheck, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast, onSubCheck, addingSubtask, newSubtask, onNewSubtaskChange, onAddSubtaskStart, onAddSubtask, onCancelSubtask }) {
   const subtaskPct = task.subtasks.length ? Math.round(task.subtasks.filter(s=>s.done).length/task.subtasks.length*100) : 0;
   const [editingText, setEditingText] = useState(false);
   const [textDraft, setTextDraft] = useState(task.text);
@@ -742,6 +799,26 @@ function TaskRow({ task, theme, color, delay, expanded, onToggle, onCheck, onUpd
             </span>
           )}
           <PriorityBadge priority={task.priority} theme={theme} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }} onClick={e => e.stopPropagation()}>
+            <button onClick={onMoveUp} disabled={isFirst} title="Move up" style={{
+              background: 'none', border: 'none', padding: '1px 3px', cursor: isFirst ? 'default' : 'pointer',
+              color: isFirst ? theme.border : theme.textSoft, borderRadius: 3, display: 'flex',
+              transition: 'color 0.15s', lineHeight: 1,
+            }}
+            onMouseEnter={e => { if (!isFirst) e.currentTarget.style.color = theme.accent; }}
+            onMouseLeave={e => { e.currentTarget.style.color = isFirst ? theme.border : theme.textSoft; }}>
+              <Icon name="chevronUp" size={12} strokeWidth={2.2} />
+            </button>
+            <button onClick={onMoveDown} disabled={isLast} title="Move down" style={{
+              background: 'none', border: 'none', padding: '1px 3px', cursor: isLast ? 'default' : 'pointer',
+              color: isLast ? theme.border : theme.textSoft, borderRadius: 3, display: 'flex',
+              transition: 'color 0.15s', lineHeight: 1,
+            }}
+            onMouseEnter={e => { if (!isLast) e.currentTarget.style.color = theme.accent; }}
+            onMouseLeave={e => { e.currentTarget.style.color = isLast ? theme.border : theme.textSoft; }}>
+              <Icon name="chevronDown" size={12} strokeWidth={2.2} />
+            </button>
+          </div>
           <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14} color={theme.textSoft} />
         </div>
       </div>
@@ -859,33 +936,98 @@ function TaskRow({ task, theme, color, delay, expanded, onToggle, onCheck, onUpd
 }
 
 // ─── TWEAKS PANEL ────────────────────────────────────────────────────────────
-function TweaksPanel({ visible, themeKey, onTheme }) {
+function TweaksPanel({ visible, themeKey, onTheme, gistToken, gistId, syncStatus, onGistToken, onGistId, onManualSync }) {
+  const [tokenDraft, setTokenDraft] = useState(gistToken);
+  const [idDraft, setIdDraft] = useState(gistId);
+  const T = THEMES.linen;
+
   if (!visible) return null;
+
+  const saveSync = () => {
+    const token = tokenDraft.trim();
+    const id = idDraft.trim();
+    onGistToken(token);
+    onGistId(id);
+    onManualSync(token, id);
+  };
+
   return (
     <div style={{
       position: 'fixed', bottom: 80, right: 24, zIndex: 200,
-      background: THEMES.linen.surface, border: `1px solid ${THEMES.linen.border}`,
-      borderRadius: 18, padding: 22, width: 240,
+      background: T.surface, border: `1px solid ${T.border}`,
+      borderRadius: 18, padding: 22, width: 280,
       boxShadow: '0 12px 40px rgba(100,60,20,0.18)',
       fontFamily: 'DM Sans, sans-serif', animation: 'modalIn 0.25s ease',
+      maxHeight: 'calc(100vh - 120px)', overflowY: 'auto',
     }}>
-      <h3 style={{ fontSize: 13, fontWeight: 700, letterSpacing:'0.06em', textTransform:'uppercase', color: THEMES.linen.textSoft, marginBottom: 14 }}>
+      <h3 style={{ fontSize: 13, fontWeight: 700, letterSpacing:'0.06em', textTransform:'uppercase', color: T.textSoft, marginBottom: 14 }}>
         Tweaks
       </h3>
-      <p style={{ fontSize: 12, color: THEMES.linen.textSoft, marginBottom: 12, fontWeight: 500 }}>Theme</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+
+      <p style={{ fontSize: 12, color: T.textSoft, marginBottom: 12, fontWeight: 500 }}>Theme</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 24 }}>
         {Object.entries(THEMES).map(([key, t]) => (
           <button key={key} onClick={() => onTheme(key)} style={{
             display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 10,
-            border: `1.5px solid ${themeKey === key ? t.accent : THEMES.linen.border}`,
+            border: `1.5px solid ${themeKey === key ? t.accent : T.border}`,
             background: themeKey === key ? t.accentSoft : 'transparent',
             cursor: 'pointer', width: '100%', textAlign: 'left', transition: 'all 0.18s',
           }}>
             <div style={{ width: 18, height: 18, borderRadius: '50%', background: t.accent, flexShrink: 0 }} />
-            <span style={{ fontSize: 13, fontWeight: themeKey === key ? 700 : 500, color: THEMES.linen.text }}>{t.name}</span>
+            <span style={{ fontSize: 13, fontWeight: themeKey === key ? 700 : 500, color: T.text }}>{t.name}</span>
             {themeKey === key && <Icon name="check" size={13} color={t.accent} strokeWidth={2.5} />}
           </button>
         ))}
+      </div>
+
+      <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 20 }}>
+        <p style={{ fontSize: 12, color: T.textSoft, marginBottom: 4, fontWeight: 600 }}>Phone Sync</p>
+        <p style={{ fontSize: 11, color: T.textSoft, marginBottom: 14, lineHeight: 1.5 }}>
+          Saves tasks to a private GitHub Gist so a scheduled job can send Telegram digests.
+        </p>
+
+        <label style={{ display:'block', fontSize:11, fontWeight:600, color:T.textSoft, letterSpacing:'0.05em', textTransform:'uppercase', marginBottom:5 }}>
+          GitHub Token (gist scope)
+        </label>
+        <input
+          type="password"
+          value={tokenDraft}
+          onChange={e => setTokenDraft(e.target.value)}
+          placeholder="ghp_xxxxxxxxxxxx"
+          style={{ width:'100%', padding:'8px 10px', borderRadius:8, border:`1.5px solid ${T.borderStrong}`,
+            background:T.bg, fontFamily:'DM Sans', fontSize:12, color:T.text, outline:'none', marginBottom:10 }}
+        />
+
+        <label style={{ display:'block', fontSize:11, fontWeight:600, color:T.textSoft, letterSpacing:'0.05em', textTransform:'uppercase', marginBottom:5 }}>
+          Gist ID <span style={{ textTransform:'none', fontWeight:400 }}>(auto-created if blank)</span>
+        </label>
+        <input
+          type="text"
+          value={idDraft}
+          onChange={e => setIdDraft(e.target.value)}
+          placeholder="leave blank to auto-create"
+          style={{ width:'100%', padding:'8px 10px', borderRadius:8, border:`1.5px solid ${T.borderStrong}`,
+            background:T.bg, fontFamily:'DM Sans', fontSize:12, color:T.text, outline:'none', marginBottom:12 }}
+        />
+
+        <button onClick={saveSync} style={{
+          width:'100%', padding:'9px', borderRadius:10, border:'none',
+          background: T.accent, color:'#fff', fontFamily:'DM Sans', fontSize:13, fontWeight:600, cursor:'pointer',
+        }}>
+          Save & Sync Now
+        </button>
+
+        {syncStatus !== 'idle' && (
+          <p style={{ marginTop:10, fontSize:11, fontWeight:500, textAlign:'center',
+            color: syncStatus==='synced' ? T.priorityLow : syncStatus==='error' ? T.priorityHigh : T.textSoft }}>
+            {syncStatus==='syncing' ? 'Syncing…' : syncStatus==='synced' ? '✓ Synced to Gist' : '✗ Sync failed — check token'}
+          </p>
+        )}
+        {gistId && (
+          <p style={{ marginTop:8, fontSize:10, color:T.textSoft, wordBreak:'break-all' }}>
+            Gist: {gistId}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -900,12 +1042,37 @@ function App() {
   const [activeId, setActiveId] = useState(() => localStorage.getItem('cl_activeId') || null);
   const [showCreate, setShowCreate] = useState(false);
   const [tweaksVisible, setTweaksVisible] = useState(false);
+  const [gistToken, setGistToken] = useState(() => localStorage.getItem('cl_gist_token') || '');
+  const [gistId, setGistId] = useState(() => localStorage.getItem('cl_gist_id') || '');
+  const [syncStatus, setSyncStatus] = useState('idle');
+  const syncTimer = useRef(null);
 
   const theme = THEMES[themeKey] || THEMES.linen;
 
   useEffect(() => { localStorage.setItem('cl_lists', JSON.stringify(lists)); }, [lists]);
   useEffect(() => { localStorage.setItem('cl_activeId', activeId || ''); }, [activeId]);
   useEffect(() => { localStorage.setItem('cl_theme', themeKey); }, [themeKey]);
+  useEffect(() => { localStorage.setItem('cl_gist_token', gistToken); }, [gistToken]);
+  useEffect(() => { localStorage.setItem('cl_gist_id', gistId); }, [gistId]);
+
+  useEffect(() => {
+    if (!gistToken) return;
+    clearTimeout(syncTimer.current);
+    syncTimer.current = setTimeout(async () => {
+      setSyncStatus('syncing');
+      try {
+        const newId = await gistSync(gistToken, gistId, lists);
+        if (newId !== gistId) {
+          setGistId(newId);
+          localStorage.setItem('cl_gist_id', newId);
+        }
+        setSyncStatus('synced');
+        setTimeout(() => setSyncStatus('idle'), 3000);
+      } catch {
+        setSyncStatus('error');
+      }
+    }, 800);
+  }, [lists]);
 
   const activeList = lists.find(l => l.id === activeId);
 
@@ -951,6 +1118,22 @@ function App() {
     return () => window.removeEventListener('message', handler);
   }, []);
 
+  const handleManualSync = useCallback(async (token, id) => {
+    if (!token) return;
+    setSyncStatus('syncing');
+    try {
+      const newId = await gistSync(token, id, lists);
+      if (newId !== id) {
+        setGistId(newId);
+        localStorage.setItem('cl_gist_id', newId);
+      }
+      setSyncStatus('synced');
+      setTimeout(() => setSyncStatus('idle'), 3000);
+    } catch {
+      setSyncStatus('error');
+    }
+  }, [lists]);
+
   const handleThemeChange = (key) => {
     setThemeKey(key);
     window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { theme: key } }, '*');
@@ -968,6 +1151,17 @@ function App() {
             <Icon name="check" size={13} color="#fff" strokeWidth={2.8} />
           </div>
           <span style={{ fontFamily: 'Playfair Display, serif', fontWeight: 700, fontSize: 16, color: theme.text }}>Checklist</span>
+          {gistToken && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 500,
+              color: syncStatus === 'synced' ? theme.priorityLow : syncStatus === 'error' ? theme.priorityHigh : theme.textSoft }}>
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%', display: 'inline-block',
+                background: syncStatus === 'synced' ? theme.priorityLow : syncStatus === 'error' ? theme.priorityHigh : syncStatus === 'syncing' ? theme.accent : theme.textSoft,
+                animation: syncStatus === 'syncing' ? 'checkPop 0.8s ease infinite' : 'none',
+              }} />
+              {syncStatus === 'syncing' ? 'Syncing…' : syncStatus === 'synced' ? 'Synced' : syncStatus === 'error' ? 'Sync failed' : 'Sync on'}
+            </span>
+          )}
         </div>
         {activeList && (
           <span style={{ fontSize: 13, color: theme.textSoft, fontStyle: 'italic' }}>{activeList.title}</span>
@@ -1010,7 +1204,9 @@ function App() {
         <Icon name="palette" size={18} />
       </button>
 
-      <TweaksPanel visible={tweaksVisible} themeKey={themeKey} onTheme={handleThemeChange} />
+      <TweaksPanel visible={tweaksVisible} themeKey={themeKey} onTheme={handleThemeChange}
+        gistToken={gistToken} gistId={gistId} syncStatus={syncStatus}
+        onGistToken={setGistToken} onGistId={setGistId} onManualSync={handleManualSync} />
 
       <style>{`
         ::-webkit-scrollbar-thumb { background: ${theme.scrollThumb}; }

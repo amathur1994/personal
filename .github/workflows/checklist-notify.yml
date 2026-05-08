@@ -1,0 +1,23 @@
+name: Checklist Digest
+
+on:
+  schedule:
+    - cron: "30 3 * * *"   # 9:00 AM IST (UTC+5:30)
+    - cron: "30 12 * * *"  # 6:00 PM IST
+  workflow_dispatch:        # manual trigger from GitHub UI
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python personal_repo/checklist-app/notify.py
+        env:
+          CHECKLIST_GIST_ID:     ${{ secrets.CHECKLIST_GIST_ID }}
+          CHECKLIST_GITHUB_TOKEN: ${{ secrets.CHECKLIST_GITHUB_TOKEN }}
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
